@@ -10,7 +10,7 @@ type State = (Tape Instruction, Tape Int, String, Int)
 
 instance Show a => Show (Tape a) where
     show :: Show a => Tape a -> String
-    show (Tape ls v rs) = printArr (reverse ls) ++ "\ESC[31m[ " ++ show v ++ " ]\ESC[0m" ++ " " ++ printArr rs
+    show (Tape ls v rs) = printArr (reverse ls) ++ red ("[ " ++ show v ++ " ] ") ++ printArr rs
         where
             printArr :: Show a => [a] -> String
             printArr = foldr (\c acc -> show c ++ " " ++ acc) ""
@@ -120,7 +120,7 @@ parseInstructions str = case instructionParser str of
             []                  -> Nothing
             [(LoopStart n, xs)] -> _parseInstructions xs (1:incLoopOffset) (loopDelta + 1) (insertRT (LoopStart n))
             [(LoopEnd n, xs)]   -> case loopDelta of
-                0 -> Nothing 
+                0 -> Nothing
                 _ -> _parseInstructions xs (tail incLoopOffset) (loopDelta - 1) (updateLoopStart (insertRT (LoopEnd $ head loopOffset)))
             [(i, xs)]           -> _parseInstructions xs incLoopOffset loopDelta (insertRT i)
             where
@@ -190,9 +190,46 @@ executeAllInstructions instr slow = do
     case initState of
         Just s  -> Just <$> executeAll s slow
         Nothing -> return Nothing
-    where 
+    where
         initState :: Maybe State
         initState = (, Tape [] 0 [], "", 0) <$> parseInstructions instr
+
+
+replace :: String -> Char -> String -> String
+replace str c r = foldr (\curr acc -> (if curr == c then r else [curr]) ++ acc) "" str
+
+count :: String -> Char -> Int
+count str c = length $  filter (==c) str
+
+split :: Eq a => a -> [a] -> [[a]]
+split x xs = (reverse <$>) <$> reverse $ split' x xs []
+    where
+        split' :: Eq a => a -> [a] -> [[a]] -> [[a]]
+        split' x y [] = split' x y [[]]
+        split' _ [] z = z
+        split' x (y:ys) (a:as)
+            | x == y = split' x ys ([]:(a:as))
+            | otherwise = split' x ys ((y:a):as) -- queen?
+
+red :: String -> String
+red str = "\ESC[31m" ++ str ++ "\ESC[0m"
+
+ctrlNewlines :: String -> [String]
+ctrlNewlines str = (++"\ESC[B") . (\n -> (n++) $ concat $ replicate (length n) "\ESC[D") <$> split '\n' str
+
+lastN :: Int -> [a] -> [a]
+lastN n xs = drop (length xs - n) xs
+
+clearCLI :: IO ()
+clearCLI = do
+    putStr "\ESC[20A"
+    putStr $ concat $ replicate 20 "\ESC[2K\ESC[B"
+
+atLeast :: Int -> a -> [a] -> [a]
+atLeast n x xs = xs ++ replicate (n - length xs) x
+
+-- >>> atLeast 7 3 [1, 2]
+-- [1,2,3,3,3,3,3]
 
 printState :: State -> IO ()
 printState (ti, td, output, i) = do
@@ -204,14 +241,15 @@ printState (ti, td, output, i) = do
     putStrLn ""
     putStrLn $ "Data: " ++ show td
     putStrLn ""
-    putStrLn $ "Ran over \ESC[31m" ++ show i ++ "\ESC[0m iterations"
+    putStrLn $ "Ran over " ++ red (show i) ++ " iterations"
 
-    -- -- Fancier print, breaks when output contains newlines
-    -- putStr "\ESC[2J"
-    -- putStr $ "\ESC[5A\rOutput: " ++ reverse output
-    -- putStr $ "\ESC[2B\rInstructions: " ++ show ti 
-    -- putStr $ "\ESC[2B\rData: " ++ show td 
-    -- putStr $ "\ESC[2B\rRan over \ESC[31m" ++ show i ++ "\ESC[0m iterations"
+    -- -- Fancier print, might be (probably is) broken
+    -- clearCLI
+    -- putStr $ "\ESC[12A" ++ concat (replicate 7 "\ESC[A")
+    -- putStr $ "\ESC[2B\rOutput: " ++ concat (atLeast 7 "\ESC[B" $ lastN 7 $ ctrlNewlines (reverse output))
+    -- putStr $ "\ESC[2B\rInstructions: " ++ show ti
+    -- putStr $ "\ESC[2B\rData: " ++ show td
+    -- putStr $ "\ESC[2B\rRan over " ++ red (show i) ++ " iterations"
 
 main :: IO ()
 main = do
@@ -225,5 +263,5 @@ main = do
             case maybeStuff of
                 Just s -> do
                     printState s
-                    putStrLn ""
+                    -- putStrLn ""
                 Nothing -> putStrLn "Invalid file."
