@@ -1,7 +1,7 @@
 module Main where
 import System.Environment (getArgs)
-import Data.Char
-import Control.Concurrent
+import Data.Char (chr, isSpace)
+import Control.Concurrent (threadDelay)
 
 data Tape a = Tape [a] a [a]
 
@@ -29,6 +29,8 @@ data Instruction = ShiftLeft
                  | LoopStart Int
                  | LoopEnd Int
                  | End
+                 | Error Instruction -- If you see this something is very wrong
+
 
 instance Show Instruction where
     show :: Instruction -> String
@@ -41,6 +43,7 @@ instance Show Instruction where
     show (LoopStart _) = "["
     show (LoopEnd _) = "]"
     show End = "END"
+    show (Error x) = "{ERR" ++ show x ++ "}"
 
 type Parser a = String -> [(a, String)]
 
@@ -114,20 +117,24 @@ instructionParser (x:xs) = case x of
 parseInstructions :: String -> Maybe (Tape Instruction)
 parseInstructions str = case instructionParser str of
     [] -> Nothing
-    [(x, xs)]  -> rewind <$> _parseInstructions xs 0 0 (Tape [] x [])
+    [(x, xs)]  -> rewind <$> _parseInstructions xs [] 0 (Tape [] x [])
     where
-        _parseInstructions :: String -> Int -> Int -> Tape Instruction -> Maybe (Tape Instruction)
-        _parseInstructions [] loopOffset loopDelta tape
+        _parseInstructions :: String -> [Int] -> Int -> Tape Instruction -> Maybe (Tape Instruction)
+        _parseInstructions [] _ loopDelta tape
             | loopDelta == 0 = Just $ insertR tape End
             | otherwise      = Nothing
         _parseInstructions str loopOffset loopDelta tape = case instructionParser str of
             []                  -> Nothing
-            [(LoopStart n, xs)] -> _parseInstructions xs 1 (loopDelta + 1) (insertR tape (LoopStart n))
-            [(LoopEnd n, xs)]   -> if loopDelta < 1 then Nothing else _parseInstructions xs 1 (loopDelta - 1) (updateLoopStart (insertR tape (LoopEnd loopOffset)) loopOffset)
-            [(i, xs)]           -> _parseInstructions xs (loopOffset + 1) loopDelta (insertR tape i)
+            [(LoopStart n, xs)] -> _parseInstructions xs ((+1) <$> (0:loopOffset)) (loopDelta + 1) (insertR tape (LoopStart n))
+            [(LoopEnd n, xs)]   -> if loopDelta < 1 then Nothing else _parseInstructions xs ((+1) <$> tail loopOffset) (loopDelta - 1) (updateLoopStart (insertR tape (LoopEnd $ head loopOffset)))
+            [(i, xs)]           -> _parseInstructions xs ((+1) <$> loopOffset) loopDelta (insertR tape i)
 
-        updateLoopStart :: Tape Instruction -> Int -> Tape Instruction
-        updateLoopStart t offset =  shiftRN (set (shiftLN t offset) (LoopStart offset)) offset
+        updateLoopStart :: Tape Instruction -> Tape Instruction
+        -- updateLoopStart (Tape ls (LoopEnd x) rs) = shiftRN (set (shiftLN (Tape ls (LoopStart x) rs) x) (LoopStart x)) x
+        updateLoopStart (Tape ls (LoopEnd x) rs) = case shiftLN (Tape ls (LoopEnd x) rs) x of
+            (Tape ls' (LoopStart _) rs') -> shiftRN (Tape ls' (LoopStart x) rs') x
+            (Tape ls' v' rs')            -> shiftRN (Tape ls' (Error v') rs') x
+        updateLoopStart (Tape ls v rs) = Tape ls (Error v) rs
 
 
 loop :: State -> State
@@ -149,7 +156,8 @@ executeInstruction (ti, td, output, i) = do
         Decrement   -> return (shiftR ti, decrement td, output, i)
         Output      -> return (shiftR ti, td, chr (get td):output, i)
         Input       -> do
-            let td' = set td 0
+            input <- getLine
+            let td' = set td (read input)
             return (shiftR ti, td', output, i)
         LoopStart x -> return $ loop (ti, td, output, i)
         LoopEnd x   -> return $ loop (ti, td, output, i)
@@ -163,7 +171,7 @@ executeAll (ti, td, output, i) slow = do
                 s <- executeInstruction (ti, td, output, i + 1)
                 if slow then do
                     threadDelay 10000
-                    printState (ti, td, output, i)
+                    printState s
                 else return ()
 
                 executeAll s slow
@@ -197,7 +205,8 @@ main = do
         [] -> putStrLn "Usage ./interpreter <file.bf>"
         (filepath:flags) -> do
             file <- readFile filepath
-            maybeStuff <- executeAllInstructions file (flags == ["--slow"])
+            let filteredFile = filter (not . isSpace) file
+            maybeStuff <- executeAllInstructions filteredFile (flags == ["--slow"])
             case maybeStuff of
                 Just s -> printState s
                 Nothing -> putStrLn "Invalid file."
