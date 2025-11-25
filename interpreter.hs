@@ -196,7 +196,7 @@ printState (ti, td, output, i) = do
     putStrLn ""
     putStrLn $ "Data: " ++ show td
     putStrLn ""
-    putStrLn $ "Ran over " ++ show i ++ " iterations"
+    putStrLn $ "Ran over \ESC[31m" ++ show i ++ "\ESC[0m iterations"
 
 main :: IO ()
 main = do
