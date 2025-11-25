@@ -2,6 +2,7 @@ module Main where
 import System.Environment (getArgs)
 import Data.Char (chr, isSpace)
 import Control.Concurrent (threadDelay)
+import Text.Read (readMaybe)
 
 data Tape a = Tape [a] a [a]
 
@@ -78,15 +79,6 @@ increment t = set t (get t + 1)
 
 decrement :: Num a => Tape a -> Tape a
 decrement t = set t (get t - 1)
-
-input :: Tape Int -> IO (Tape Int)
-input t = do
-    set t . read <$> getLine
-
-output :: Show a => Tape a -> IO (Tape a)
-output t = do
-    print (get t)
-    pure t
 
 shiftN :: (Tape a -> Tape a) -> Tape a -> Int -> Tape a
 shiftN f t n = case n of
@@ -171,9 +163,10 @@ executeInstruction (ti, td, output, i) = do
         Output      -> return (shiftR ti, td, safeChrCons (get td) output, i)
         Input       -> do
             putStr "Enter number: "
-            input <- getLine
-            let td' = set td (read input)
-            return (shiftR ti, td', output, i)
+            inp <- readMaybe <$> getLine
+            case inp of
+                Nothing -> return (shiftR ti, set td 0, output, i)
+                Just x  -> return (shiftR ti, set td x, output, i)
         LoopStart x -> return $ loop (ti, td, output, i)
         LoopEnd x   -> return $ loop (ti, td, output, i)
         End         -> return (ti, td, output, i)
