@@ -1,10 +1,11 @@
 module Main where
 import System.Environment (getArgs)
 import Data.Char
+import Control.Concurrent
 
 data Tape a = Tape [a] a [a]
 
-type State = (Tape Instruction, Tape Int, Int)
+type State = (Tape Instruction, Tape Int, String, Int)
 
 instance Show a => Show (Tape a) where
     show :: Show a => Tape a -> String
@@ -130,65 +131,73 @@ parseInstructions str = case instructionParser str of
 
 
 loop :: State -> State
-loop (Tape li (LoopStart x) ri, Tape ld vd rd, i) = case vd of
-    0 -> (shiftRN (Tape li (LoopStart x) ri) x, Tape ld vd rd, i)
-    _ -> (shiftR (Tape li (LoopStart x) ri), Tape ld vd rd, i)
+loop (Tape li (LoopStart x) ri, Tape ld vd rd, output, i) = case vd of
+    0 -> (shiftRN (Tape li (LoopStart x) ri) x, Tape ld vd rd, output, i)
+    _ -> (shiftR (Tape li (LoopStart x) ri), Tape ld vd rd, output, i)
 
-loop (Tape li (LoopEnd x) ri, Tape ld vd rd, i) = case vd of
-    0 -> (shiftR (Tape li (LoopEnd x) ri), Tape ld vd rd, i)
-    _ -> (shiftLN (Tape li (LoopEnd x) ri) x, Tape ld vd rd, i)
+loop (Tape li (LoopEnd x) ri, Tape ld vd rd, output, i) = case vd of
+    0 -> (shiftR (Tape li (LoopEnd x) ri), Tape ld vd rd, output, i)
+    _ -> (shiftLN (Tape li (LoopEnd x) ri) x, Tape ld vd rd, output, i)
 
 
 executeInstruction :: State -> IO State
-executeInstruction (ti, td, i) = do
+executeInstruction (ti, td, output, i) = do
     case get ti of
-        ShiftLeft   -> return (shiftR ti, shiftInsert shiftL insertL td 0, i)
-        ShiftRight  -> return (shiftR ti, shiftInsert shiftR insertR td 0, i)
-        Increment   -> return (shiftR ti, increment td, i)
-        Decrement   -> return (shiftR ti, decrement td, i)
-        Output      -> do
-            putStr [chr $ get td]
-            return (shiftR ti, td, i)
+        ShiftLeft   -> return (shiftR ti, shiftInsert shiftL insertL td 0, output, i)
+        ShiftRight  -> return (shiftR ti, shiftInsert shiftR insertR td 0, output, i)
+        Increment   -> return (shiftR ti, increment td, output, i)
+        Decrement   -> return (shiftR ti, decrement td, output, i)
+        Output      -> return (shiftR ti, td, chr (get td):output, i)
         Input       -> do
             let td' = set td 0
-            return (shiftR ti, td', i)
-        LoopStart x -> return $ loop (ti, td, i)
-        LoopEnd x   -> return $ loop (ti, td, i)
-        End         -> return (ti, td, i)
+            return (shiftR ti, td', output, i)
+        LoopStart x -> return $ loop (ti, td, output, i)
+        LoopEnd x   -> return $ loop (ti, td, output, i)
+        End         -> return (ti, td, output, i)
 
-executeAll :: State -> IO State
-executeAll (ti, td, i) = do
+executeAll :: State -> Bool -> IO State
+executeAll (ti, td, output, i) slow = do
     case ti of
-        Tape ls End rs -> pure (ti, td, i)
+        Tape ls End rs -> pure (ti, td, output, i)
         _              -> do
-                s <- executeInstruction (ti, td, i + 1)
-                executeAll s
+                s <- executeInstruction (ti, td, output, i + 1)
+                if slow then do
+                    threadDelay 10000
+                    printState (ti, td, output, i)
+                else return ()
 
-executeAllInstructions :: String -> IO (Maybe State)
-executeAllInstructions instr = do
+                executeAll s slow
+
+
+executeAllInstructions :: String -> Bool -> IO (Maybe State)
+executeAllInstructions instr slow = do
     case initState of
-        Just s  -> Just <$> executeAll s
+        Just s  -> Just <$> executeAll s slow
         Nothing -> return Nothing
     where 
         initState :: Maybe State
-        initState = (, Tape [] 0 [], 0) <$> parseInstructions instr
+        initState = (, Tape [] 0 [], "", 0) <$> parseInstructions instr
+
+printState :: State -> IO ()
+printState (ti, td, output, i) = do
+    putStr "\ESC[2J"
+    putStrLn ""
+    putStrLn $ "Output: " ++ reverse output
+    putStrLn ""
+    putStrLn $ "Instructions: " ++ show ti
+    putStrLn ""
+    putStrLn $ "Data: " ++ show td
+    putStrLn ""
+    putStrLn $ "Ran over " ++ show i ++ " iterations"
 
 main :: IO ()
 main = do
     args <- getArgs
     case args of
         [] -> putStrLn "Usage ./interpreter <file.bf>"
-        (filepath:_) -> do
+        (filepath:flags) -> do
             file <- readFile filepath
-            putStr "Output: "
-            maybeStuff <- executeAllInstructions file
+            maybeStuff <- executeAllInstructions file (flags == ["--slow"])
             case maybeStuff of
-                Just (ir, dr, i) -> do
-                    putStrLn ""
-                    putStrLn ""
-                    putStrLn $ "Instructions: " ++ show ir
-                    putStrLn ""
-                    putStrLn $ "Data: " ++ show dr
-                    putStrLn ""
-                    putStrLn $ "Ran over " ++ show i ++ " iterations"
+                Just s -> printState s
                 Nothing -> putStrLn "Invalid file."
