@@ -213,6 +213,13 @@ printState (ti, td, output, i) = do
     putStrLn ""
     putStrLn $ "Ran over \ESC[31m" ++ show i ++ "\ESC[0m iterations"
 
+    -- -- Fancier print, breaks when output contains newlines
+    -- putStr "\ESC[2J"
+    -- putStr $ "\ESC[5A\rOutput: " ++ reverse output
+    -- putStr $ "\ESC[2B\rInstructions: " ++ show ti 
+    -- putStr $ "\ESC[2B\rData: " ++ show td 
+    -- putStr $ "\ESC[2B\rRan over \ESC[31m" ++ show i ++ "\ESC[0m iterations"
+
 main :: IO ()
 main = do
     args <- getArgs
@@ -223,5 +230,7 @@ main = do
             let filteredFile = filter (not . isSpace) file
             maybeStuff <- executeAllInstructions filteredFile (flags == ["--slow"])
             case maybeStuff of
-                Just s -> printState s
+                Just s -> do
+                    printState s
+                    putStrLn ""
                 Nothing -> putStrLn "Invalid file."
