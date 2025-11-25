@@ -88,15 +88,16 @@ output t = do
     print (get t)
     pure t
 
-shiftLN :: Tape a -> Int -> Tape a
-shiftLN t n = case n of
+shiftN :: (Tape a -> Tape a) -> Tape a -> Int -> Tape a
+shiftN f t n = case n of
     0 -> t
-    _ -> shiftLN (shiftL t) (n-1)
+    _ -> shiftN f (f t) (n-1)
 
 shiftRN :: Tape a -> Int -> Tape a
-shiftRN t n = case n of
-    0 -> t
-    _ -> shiftRN (shiftR t) (n-1)
+shiftRN = shiftN shiftR
+
+shiftLN :: Tape a -> Int -> Tape a
+shiftLN = shiftN shiftL
 
 rewind :: Tape a -> Tape a
 rewind (Tape ls v rs) = shiftLN (Tape ls v rs) (length ls)
@@ -125,12 +126,19 @@ parseInstructions str = case instructionParser str of
             | otherwise      = Nothing
         _parseInstructions str loopOffset loopDelta tape = case instructionParser str of
             []                  -> Nothing
-            [(LoopStart n, xs)] -> _parseInstructions xs ((+1) <$> (0:loopOffset)) (loopDelta + 1) (insertR tape (LoopStart n))
-            [(LoopEnd n, xs)]   -> if loopDelta < 1 then Nothing else _parseInstructions xs ((+1) <$> tail loopOffset) (loopDelta - 1) (updateLoopStart (insertR tape (LoopEnd $ head loopOffset)))
-            [(i, xs)]           -> _parseInstructions xs ((+1) <$> loopOffset) loopDelta (insertR tape i)
+            [(LoopStart n, xs)] -> _parseInstructions xs (1:incLoopOffset) (loopDelta + 1) (insertRT (LoopStart n))
+            [(LoopEnd n, xs)]   -> case loopDelta of
+                0 -> Nothing 
+                _ -> _parseInstructions xs (tail incLoopOffset) (loopDelta - 1) (updateLoopStart (insertRT (LoopEnd $ head loopOffset)))
+            [(i, xs)]           -> _parseInstructions xs incLoopOffset loopDelta (insertRT i)
+            where
+                incLoopOffset :: [Int]
+                incLoopOffset = (+1) <$> loopOffset
+
+                insertRT :: Instruction -> Tape Instruction
+                insertRT = insertR tape
 
         updateLoopStart :: Tape Instruction -> Tape Instruction
-        -- updateLoopStart (Tape ls (LoopEnd x) rs) = shiftRN (set (shiftLN (Tape ls (LoopStart x) rs) x) (LoopStart x)) x
         updateLoopStart (Tape ls (LoopEnd x) rs) = case shiftLN (Tape ls (LoopEnd x) rs) x of
             (Tape ls' (LoopStart _) rs') -> shiftRN (Tape ls' (LoopStart x) rs') x
             (Tape ls' v' rs')            -> shiftRN (Tape ls' (Error v') rs') x
@@ -138,14 +146,20 @@ parseInstructions str = case instructionParser str of
 
 
 loop :: State -> State
-loop (Tape li (LoopStart x) ri, Tape ld vd rd, output, i) = case vd of
-    0 -> (shiftRN (Tape li (LoopStart x) ri) x, Tape ld vd rd, output, i)
-    _ -> (shiftR (Tape li (LoopStart x) ri), Tape ld vd rd, output, i)
+loop (Tape li (LoopStart x) ri, td, output, i) = case vd of
+    0 -> (shiftRN (Tape li (LoopStart x) ri) x, td, output, i)
+    _ -> (shiftR (Tape li (LoopStart x) ri), td, output, i)
+    where (Tape ld vd rd) = td
 
-loop (Tape li (LoopEnd x) ri, Tape ld vd rd, output, i) = case vd of
-    0 -> (shiftR (Tape li (LoopEnd x) ri), Tape ld vd rd, output, i)
-    _ -> (shiftLN (Tape li (LoopEnd x) ri) x, Tape ld vd rd, output, i)
+loop (Tape li (LoopEnd x) ri, td, output, i) = case vd of
+    0 -> (shiftR (Tape li (LoopEnd x) ri), td, output, i)
+    _ -> (shiftLN (Tape li (LoopEnd x) ri) x, td, output, i)
+    where (Tape ld vd rd) = td
 
+safeChrCons :: Int -> String -> String
+safeChrCons x str
+    | x < 0     = str
+    | otherwise = chr x : str
 
 executeInstruction :: State -> IO State
 executeInstruction (ti, td, output, i) = do
@@ -154,8 +168,9 @@ executeInstruction (ti, td, output, i) = do
         ShiftRight  -> return (shiftR ti, shiftInsert shiftR insertR td 0, output, i)
         Increment   -> return (shiftR ti, increment td, output, i)
         Decrement   -> return (shiftR ti, decrement td, output, i)
-        Output      -> return (shiftR ti, td, chr (get td):output, i)
+        Output      -> return (shiftR ti, td, safeChrCons (get td) output, i)
         Input       -> do
+            putStr "Enter number: "
             input <- getLine
             let td' = set td (read input)
             return (shiftR ti, td', output, i)
