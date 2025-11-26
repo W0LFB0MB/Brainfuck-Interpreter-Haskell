@@ -277,12 +277,11 @@ printState (ti, td, output, _, i) = do
 
     -- -- Fancier print, might be (is) broken
     -- clearCLI
-    -- putStr $ "\ESC[12A" ++ concat (replicate 7 "\ESC[A")
-    -- putStr $ "\ESC[2B\rOutput: " ++ concat (atLeast 7 "\ESC[B" $ lastN 7 $ ctrlNewlines (reverse output))
-    -- putStr $ "\ESC[2B\rInstructions: " ++ showTape ti
-    -- putStr $ "\ESC[2B\rData: " ++ showTape td
+    -- putStr $ "\ESC[13A" ++ concat (replicate 3 "\ESC[A")
+    -- putStr $ "\ESC[2B\rOutput: " ++ concat (atLeast 3 "\ESC[B" $ lastN 3 $ ctrlNewlines (reverse output))
+    -- putStr $ "\ESC[2B\rInstructions: " ++ tapeToPrettyString ti
+    -- putStr $ "\ESC[2B\rData: " ++ tapeToPrettyString td
     -- putStr $ "\ESC[2B\rRan over " ++ red (show i) ++ " iterations"
-
 main :: IO ()
 main = do
     args <- getArgs
