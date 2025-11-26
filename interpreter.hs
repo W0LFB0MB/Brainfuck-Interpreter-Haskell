@@ -99,6 +99,7 @@ decrement1B (Tape ls v rs)
     | v == -128 = Tape ls 127 rs
     | otherwise = decrement (Tape ls v rs)
 
+-- doesnt work
 byteify :: Int -> Int
 byteify x
     | masked > 127 = masked - 255
@@ -185,8 +186,8 @@ executeInstruction (ti, td, output, input, i) =
     case get ti of
         ShiftLeft   -> (ti >>> 1, shiftInsert (<<< 1) insertL td 0, output, input, i)
         ShiftRight  -> (ti >>> 1, shiftInsert (>>> 1) insertR td 0, output, input, i)
-        Increment   -> (ti >>> 1, increment1B td, output, input, i)
-        Decrement   -> (ti >>> 1, decrement1B td, output, input, i)
+        Increment   -> (ti >>> 1, increment td, output, input, i)
+        Decrement   -> (ti >>> 1, decrement td, output, input, i)
         Output      -> (ti >>> 1, td, safeChrCons (get td) output, input, i)
         Input       -> (ti, td, output, [0], i)
         LoopStart x -> loop (ti, td, output, input, i)
@@ -199,7 +200,7 @@ readLineArr = do
     inp <- readMaybe <$> getLine
     case inp of
         Nothing -> pure []
-        Just x  -> pure [byteify x]
+        Just x  -> pure [x]
 
 
 
