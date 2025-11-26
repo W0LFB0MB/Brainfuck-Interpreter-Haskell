@@ -6,16 +6,28 @@ import Text.Read (readMaybe)
 
 data Tape a = Tape [a] a [a]
 
-type State = (Tape Instruction, Tape Int, String, Int)
+instance Functor Tape where
+    fmap :: (a -> b) -> Tape a -> Tape b
+    fmap f (Tape ls m rs) = Tape (f <$> ls) (f m) (f <$> rs)
+
+instance Applicative Tape where
+    pure :: a -> Tape a
+    pure x = Tape [] x []
+
+    (<*>) :: Tape (a -> b) -> Tape a -> Tape b
+    ft <*> t = get ft <$> t
+
+type State = (Tape Instruction, Tape Int, String, [Int], Int)
 
 instance Show a => Show (Tape a) where
     show :: Show a => Tape a -> String
-    show (Tape ls v rs) = printArr (reverse ls) ++ red ("[ " ++ show v ++ " ] ") ++ printArr rs
-        where
-            printArr :: Show a => [a] -> String
-            printArr = foldr (\c acc -> show c ++ " " ++ acc) ""
+    show (Tape ls v rs) = printArr (reverse ls) ++ "[ " ++ show v ++ " ] " ++ printArr rs
 
+tapeToPrettyString :: Show a => Tape a -> String
+tapeToPrettyString (Tape ls v rs) = printArr (reverse ls) ++ red ("[ " ++ show v ++ " ] ") ++ printArr rs
 
+printArr :: Show a => [a] -> String
+printArr = foldr (\c acc -> show c ++ " " ++ acc) ""
 
 instance Eq a => Eq (Tape a) where
     (==) :: Tape a -> Tape a -> Bool
@@ -30,23 +42,20 @@ data Instruction = ShiftLeft
                  | LoopStart Int
                  | LoopEnd Int
                  | End
-                 | Error Instruction -- If you see this something is very wrong
+    deriving Eq
 
 
 instance Show Instruction where
     show :: Instruction -> String
-    show ShiftLeft = "<"
-    show ShiftRight = ">"
-    show Increment = "+"
-    show Decrement = "-"
-    show Input = ","
-    show Output = "."
-    show (LoopStart _) = "["
-    show (LoopEnd _) = "]"
-    show End = "END"
-    show (Error x) = "{ERR" ++ show x ++ "}"
-
-type Parser a = String -> [(a, String)]
+    show ShiftLeft     = "<"
+    show ShiftRight    = ">"
+    show Increment     = "+"
+    show Decrement     = "-"
+    show Input         = ","
+    show Output        = "."
+    show (LoopStart i) = "["
+    show (LoopEnd i)   = "]"
+    show End           = "END"
 
 get :: Tape a -> a
 get (Tape _ v _) = v
@@ -80,72 +89,89 @@ increment t = set t (get t + 1)
 decrement :: Num a => Tape a -> Tape a
 decrement t = set t (get t - 1)
 
-shiftN :: (Tape a -> Tape a) -> Tape a -> Int -> Tape a
-shiftN f t n = case n of
-    0 -> t
-    _ -> shiftN f (f t) (n-1)
+increment1B :: Tape Int -> Tape Int
+increment1B (Tape ls v rs)
+    | v == 127 = Tape ls (-128) rs
+    | otherwise = increment (Tape ls v rs)
 
-shiftRN :: Tape a -> Int -> Tape a
-shiftRN = shiftN shiftR
+decrement1B :: Tape Int -> Tape Int
+decrement1B (Tape ls v rs)
+    | v == -128 = Tape ls 127 rs
+    | otherwise = decrement (Tape ls v rs)
 
-shiftLN :: Tape a -> Int -> Tape a
-shiftLN = shiftN shiftL
+byteify :: Int -> Int
+byteify x
+    | masked > 127 = masked - 255
+    | otherwise = masked
+    where 
+        masked :: Int
+        masked = sum $ uncurry (*) <$> zip ((2^) <$> [0..7]) (getBits x 8)
+
+getBits :: Int -> Int -> [Int]
+getBits x y = getBit x <$> [0..(y-1)]
+        
+getBit :: Int -> Int -> Int
+getBit x y = (x `div` 2 ^ y) `mod` 2
+
+(>>>) :: Tape a -> Int -> Tape a
+t >>> i = repeatf i shiftR t
+infixr 8 >>>
+
+(<<<) :: Tape a -> Int -> Tape a
+t <<< i = repeatf i shiftL t
+infixr 8 <<<
+
+repeatf :: Int -> (a -> a) -> a -> a
+repeatf 0 _ = id
+repeatf n f = repeatf (n - 1) f . f
+
+lexInstructions :: [Char] -> [Instruction]
+lexInstructions [] = []
+lexInstructions (x:xs) = case x of
+    '<' -> ShiftLeft : lexInstructions xs
+    '>' -> ShiftRight : lexInstructions xs
+    '+' -> Increment : lexInstructions xs
+    '-' -> Decrement : lexInstructions xs
+    '.' -> Output : lexInstructions xs
+    ',' -> Input : lexInstructions xs
+    '[' -> LoopStart 0 : lexInstructions xs
+    ']' -> LoopEnd 0 : lexInstructions xs
+    _   -> lexInstructions xs
 
 rewind :: Tape a -> Tape a
-rewind (Tape ls v rs) = shiftLN (Tape ls v rs) (length ls)
+rewind (Tape ls v rs) = Tape ls v rs <<< length ls
 
-instructionParser :: Parser Instruction
-instructionParser [] = []
-instructionParser (x:xs) = case x of
-    '<' -> [(ShiftLeft, xs)]
-    '>' -> [(ShiftRight, xs)]
-    '+' -> [(Increment, xs)]
-    '-' -> [(Decrement, xs)]
-    '.' -> [(Output, xs)]
-    ',' -> [(Input, xs)]
-    '[' -> [(LoopStart 0, xs)]
-    ']' -> [(LoopEnd 0, xs)]
-    _   -> []
-
-parseInstructions :: String -> Maybe (Tape Instruction)
-parseInstructions str = case instructionParser str of
-    [] -> Nothing
-    [(x, xs)]  -> rewind <$> _parseInstructions xs [] 0 (Tape [] x [])
+parseInstructions :: [Instruction] -> Maybe (Tape Instruction)
+parseInstructions is = rewind <$> parseInstructions' is [] (pure End)
     where
-        _parseInstructions :: String -> [Int] -> Int -> Tape Instruction -> Maybe (Tape Instruction)
-        _parseInstructions [] _ loopDelta tape
-            | loopDelta == 0 = Just $ insertR tape End
-            | otherwise      = Nothing
-        _parseInstructions str loopOffset loopDelta tape = case instructionParser str of
-            []                  -> Nothing
-            [(LoopStart n, xs)] -> _parseInstructions xs (1:incLoopOffset) (loopDelta + 1) (insertRT (LoopStart n))
-            [(LoopEnd n, xs)]   -> case loopDelta of
-                0 -> Nothing
-                _ -> _parseInstructions xs (tail incLoopOffset) (loopDelta - 1) (updateLoopStart (insertRT (LoopEnd $ head loopOffset)))
-            [(i, xs)]           -> _parseInstructions xs incLoopOffset loopDelta (insertRT i)
-            where
-                incLoopOffset :: [Int]
-                incLoopOffset = (+1) <$> loopOffset
+        parseInstructions' :: [Instruction] -> [Int] -> Tape Instruction -> Maybe (Tape Instruction)
+        parseInstructions' []     [ ] t = Just t
+        parseInstructions' []     ___ t = Nothing
+        parseInstructions' (LoopStart n:is) off t = parseInstructions' is (1 : inc off) $ t <+ LoopStart n
+        parseInstructions' (LoopEnd _:_) [] t = Nothing
+        parseInstructions' (LoopEnd n:is) off t = parseInstructions' is (inc $ tail off) $ (t <+ LoopEnd (head off)) <! head off
+        parseInstructions' (i:is) off t = parseInstructions' is (inc off) $ t <+ i
 
-                insertRT :: Instruction -> Tape Instruction
-                insertRT = insertR tape
+        (<+) :: Tape a -> a -> Tape a
+        (<+) t v = insertL t v >>> 1
 
-        updateLoopStart :: Tape Instruction -> Tape Instruction
-        updateLoopStart (Tape ls (LoopEnd x) rs) = case shiftLN (Tape ls (LoopEnd x) rs) x of
-            (Tape ls' (LoopStart _) rs') -> shiftRN (Tape ls' (LoopStart x) rs') x
-            (Tape ls' v' rs')            -> shiftRN (Tape ls' (Error v') rs') x
-        updateLoopStart (Tape ls v rs) = Tape ls (Error v) rs
+        (<!) :: Tape Instruction -> Int -> Tape Instruction
+        (<!) t i = Tape ls (LoopStart i) rs >>> (i + 1)
+            where (Tape ls _ rs) = t <<< (i + 1)
+
+        inc :: [Int] -> [Int]
+        inc = fmap (+1)
 
 
 loop :: State -> State
-loop (Tape li (LoopStart x) ri, td, output, i) = case vd of
-    0 -> (shiftRN (Tape li (LoopStart x) ri) x, td, output, i)
-    _ -> (shiftR (Tape li (LoopStart x) ri), td, output, i)
+loop (Tape li (LoopStart x) ri, td, output, input, i) = case vd of
+    0 -> (Tape li (LoopStart x) ri >>> x, td, output, input, i)
+    _ -> (Tape li (LoopStart x) ri >>> 1, td, output, input, i)
     where (Tape ld vd rd) = td
 
-loop (Tape li (LoopEnd x) ri, td, output, i) = case vd of
-    0 -> (shiftR (Tape li (LoopEnd x) ri), td, output, i)
-    _ -> (shiftLN (Tape li (LoopEnd x) ri) x, td, output, i)
+loop (Tape li (LoopEnd x) ri, td, output, input, i) = case vd of
+    0 -> (Tape li (LoopEnd x) ri >>> 1, td, output, input, i)
+    _ -> (Tape li (LoopEnd x) ri <<< x, td, output, input, i)
     where (Tape ld vd rd) = td
 
 safeChrCons :: Int -> String -> String
@@ -153,37 +179,45 @@ safeChrCons x str
     | x < 0     = str
     | otherwise = chr x : str
 
-executeInstruction :: State -> IO State
-executeInstruction (ti, td, output, i) = do
+executeInstruction :: State -> State
+executeInstruction (ti, td, output, [x], i) = executeInstruction (ti >>> 1, set td x, output, [], i)
+executeInstruction (ti, td, output, input, i) =
     case get ti of
-        ShiftLeft   -> return (shiftR ti, shiftInsert shiftL insertL td 0, output, i)
-        ShiftRight  -> return (shiftR ti, shiftInsert shiftR insertR td 0, output, i)
-        Increment   -> return (shiftR ti, increment td, output, i)
-        Decrement   -> return (shiftR ti, decrement td, output, i)
-        Output      -> return (shiftR ti, td, safeChrCons (get td) output, i)
-        Input       -> do
-            putStr "Enter number: "
-            inp <- readMaybe <$> getLine
-            case inp of
-                Nothing -> return (shiftR ti, set td 0, output, i)
-                Just x  -> return (shiftR ti, set td x, output, i)
-        LoopStart x -> return $ loop (ti, td, output, i)
-        LoopEnd x   -> return $ loop (ti, td, output, i)
-        End         -> return (ti, td, output, i)
+        ShiftLeft   -> (ti >>> 1, shiftInsert (<<< 1) insertL td 0, output, input, i)
+        ShiftRight  -> (ti >>> 1, shiftInsert (>>> 1) insertR td 0, output, input, i)
+        Increment   -> (ti >>> 1, increment td, output, input, i)
+        Decrement   -> (ti >>> 1, decrement td, output, input, i)
+        Output      -> (ti >>> 1, td, safeChrCons (get td) output, input, i)
+        Input       -> (ti, td, output, [0], i)
+        LoopStart x -> loop (ti, td, output, input, i)
+        LoopEnd x   -> loop (ti, td, output, input, i)
+        End         -> (ti, td, output, input, i)
 
-executeAll :: State -> Bool -> IO State
-executeAll (ti, td, output, i) slow = do
+readLineArr :: IO [Int]
+readLineArr = do
+    putStr "Enter number: "
+    inp <- readMaybe <$> getLine
+    case inp of
+        Nothing -> pure []
+        Just x  -> pure [x]
+
+
+
+executeAll :: State -> Bool  -> IO State
+executeAll (ti, td, output, input, i) slow = do
     case ti of
-        Tape ls End rs -> pure (ti, td, output, i)
+        Tape ls End rs -> pure (ti, td, output, input, i)
         _              -> do
-                s <- executeInstruction (ti, td, output, i + 1)
-                if slow then do
+                input' <- if null input then pure [] else readLineArr
+                let s = executeInstruction (ti, td, output, input', i + 1)
+                executeOnly slow $ do
                     threadDelay 10000
                     printState s
-                else return ()
 
                 executeAll s slow
 
+executeOnly :: Bool -> IO () -> IO ()
+executeOnly condition todo = if condition then todo else pure ()
 
 executeAllInstructions :: String -> Bool -> IO (Maybe State)
 executeAllInstructions instr slow = do
@@ -192,14 +226,14 @@ executeAllInstructions instr slow = do
         Nothing -> return Nothing
     where
         initState :: Maybe State
-        initState = (, Tape [] 0 [], "", 0) <$> parseInstructions instr
+        initState = (, pure 0, "", [], 0) <$> parseInstructions (lexInstructions instr)
 
 
 replace :: String -> Char -> String -> String
 replace str c r = foldr (\curr acc -> (if curr == c then r else [curr]) ++ acc) "" str
 
 count :: String -> Char -> Int
-count str c = length $  filter (==c) str
+count str c = length $ filter (==c) str
 
 split :: Eq a => a -> [a] -> [[a]]
 split x xs = (reverse <$>) <$> reverse $ split' x xs []
@@ -228,27 +262,24 @@ clearCLI = do
 atLeast :: Int -> a -> [a] -> [a]
 atLeast n x xs = xs ++ replicate (n - length xs) x
 
--- >>> atLeast 7 3 [1, 2]
--- [1,2,3,3,3,3,3]
-
-printState :: State -> IO ()
-printState (ti, td, output, i) = do
+printState :: State  -> IO ()
+printState (ti, td, output, _, i) = do
     putStr "\ESC[2J"
     putStrLn ""
     putStrLn $ "Output: " ++ reverse output
     putStrLn ""
-    putStrLn $ "Instructions: " ++ show ti
+    putStrLn $ "Instructions: " ++ tapeToPrettyString ti
     putStrLn ""
-    putStrLn $ "Data: " ++ show td
+    putStrLn $ "Data: " ++ tapeToPrettyString td
     putStrLn ""
     putStrLn $ "Ran over " ++ red (show i) ++ " iterations"
 
-    -- -- Fancier print, might be (probably is) broken
+    -- -- Fancier print, might be (is) broken
     -- clearCLI
     -- putStr $ "\ESC[12A" ++ concat (replicate 7 "\ESC[A")
     -- putStr $ "\ESC[2B\rOutput: " ++ concat (atLeast 7 "\ESC[B" $ lastN 7 $ ctrlNewlines (reverse output))
-    -- putStr $ "\ESC[2B\rInstructions: " ++ show ti
-    -- putStr $ "\ESC[2B\rData: " ++ show td
+    -- putStr $ "\ESC[2B\rInstructions: " ++ showTape ti
+    -- putStr $ "\ESC[2B\rData: " ++ showTape td
     -- putStr $ "\ESC[2B\rRan over " ++ red (show i) ++ " iterations"
 
 main :: IO ()
@@ -263,5 +294,4 @@ main = do
             case maybeStuff of
                 Just s -> do
                     printState s
-                    -- putStrLn ""
                 Nothing -> putStrLn "Invalid file."
